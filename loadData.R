@@ -14,7 +14,7 @@ beigebook$Date = as.Date(beigebook$Date, origin="1904-01-01")
 # calculate volatility
 # y = kDayDocVol(sp500$Adj.Close, sp500$Date, beigebook$Date, 21)
 # rmidx = which(is.na(y))
-# y = y[!is.na(y)]  # remove documents with no associated volatility
+# y = y[!is.na(y)]  # re-move documents with no associated volatility
 # beigebook = beigebook[-rmidx,]
 # numdocs = dim(beigebook)[1]
 
@@ -24,16 +24,27 @@ beigebook = beigebook[-nrow(beigebook),]
 # dtm
 library("tm", lib.loc="/Library/Frameworks/R.framework/Versions/3.1/Resources/library")
 library("RTextTools", lib.loc="/Library/Frameworks/R.framework/Versions/3.1/Resources/library")
+library("SnowballC")
 
-txt = tm_map(beigebook$Text, content_transformer(tolower))
-txt = tm_map(beigebook$Text, removePunctuation)
-txt = tm_map(txt, removeWords,
-             c(""))
-dtm = create_matrix(beigebook$Text, removeNumbers=TRUE, removePunctuation=TRUE,removeStopwords=TRUE, 
-                    stemWords=TRUE, stripWhitespace=TRUE, toLower=TRUE, minWordLength=3)
-dtm = removeSparseTerms(dtm, .95)
-tf = colSums(as.matrix(dtm))
-tf.order = tf[order(tf)]
+bb.docs <- Corpus(VectorSource(beigebook$Text))
+bb.docs <- tm_map(bb.docs, removeWords,
+              c("Boston", "New York", "Atlanta", "St. Louis", "Cleveland",
+                "Chicago", "Richmond", "Dallas", "Philadelphia", 
+                "Minneapolis", "Kansas City", "San Francisco",
+                "Overview", "Introduction"))
+bb.docs <- tm_map(bb.docs, content_transformer(tolower), lazy=T)
+bb.docs <- tm_map(bb.docs, removeNumbers, lazy=T)
+bb.docs <- tm_map(bb.docs, removePunctuation, lazy=T)
+bb.docs <- tm_map(bb.docs, removeWords, stopwords("english"), lazy=T)
+bb.docs <- tm_map(bb.docs, stripWhitespace, lazy=T)
+bb.docs <- tm_map(bb.docs, stemDocument)
+bb.docs <- tm_map(bb.docs, removeWords, 
+                  c("general", "the","report", "also", "said", "node",
+                    "indic", "district"), lazy=T)
+dtm <- DocumentTermMatrix(bb.docs)
+
+tf <- colSums(as.matrix(dtm))
+tf.order <- tf[order(tf, decreasing=T)]
 
 # train and test
 train.x = dtm[1:230,]

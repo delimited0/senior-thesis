@@ -8,6 +8,7 @@
 # train.n + pred.n must not exceed length(y)
 
 rollingLassoPredict <- function(x, y, train.n, pred.n) {
+  library(glmnet)
   error = rep(NA, length(y) - train.n - pred.n)
   for (i in 1:(length(y)-train.n-pred.n+1)) {
     train.x = x[i:(i+train.n-1),]

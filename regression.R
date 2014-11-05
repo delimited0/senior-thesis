@@ -1,5 +1,6 @@
 # regression analysis
-library("glmnet", lib.loc="/Library/Frameworks/R.framework/Versions/3.1/Resources/library")
+# one train, one test  
+library(glmnet)
 
 # glm approach
 train.x = as.matrix(train.x)
