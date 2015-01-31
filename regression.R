@@ -6,7 +6,11 @@ library(glmnet)
 train.x = as.matrix(train.x)
 test.x = as.matrix(test.x)
 lassoreg = cv.glmnet(x=train.x, y=train.y, family="gaussian",
-                     alpha=0)
+                     alpha=1)
 lassoreg.pred = predict(lassoreg, newx=test.x,
                       s="lambda.min")
 lassoreg.mse = mean((lassoreg.pred - test.y)^2)
+
+# random foret
+rf <- randomForest(train.x, train.y)
+
