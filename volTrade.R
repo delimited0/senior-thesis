@@ -82,6 +82,7 @@ colnames(USD.OIS) <- c("Date","Rate")
 USD.OIS$Date <- as.Date(USD.OIS$Date,"%m/%d/%Y")
 
 sp500.selling <- volSelling(sp500, impVol.1M.sp500, USD.OIS)
+qplot(x=impVol.1M.sp500$Date, y=sp500.selling[,'values'], geom="line", ylab="Wealth", xlab="Date")
 
-impVol.1M.ftse <- read.csv("data/ftse100_IV_1M.csv",skip=1569,header=F)
+impVol.1M.ftse <- read.csv("data/ftse100_IV_1M.csv",skip=1569,header=F, )
 colnames(impVol.1M.ftse) <- c("Date","impVol")

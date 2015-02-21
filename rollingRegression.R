@@ -37,7 +37,7 @@ rollingPredict <- function(x, y, train.n, pred.n, method) {
     test.y <- y[(i+train.n):(i+train.n+pred.n-1)]
     model <- eval(parse(text=method)) 
     model.pred <- predict(model, test.x)
-    error[i] <- logMSE(model.pred, test.y)
+    error[i] <- model.pred - test.y
   }
   return(error)
 }
@@ -53,13 +53,15 @@ rollingPredict <- function(x, y, train.n, pred.n, method) {
 
 rollingPrevVol <- function(y, train.n, pred.n, shift) {
   error = rep(NA, length(y) - train.n - pred.n - shift)
+  preds = rep(NA, length(y) - train.n - pred.n - shift)
   for (i in shift:(length(y)-train.n-pred.n+1)) {
     train = y[i:(i+train.n-1)]
     train = mean(train)
     test = y[(i+train.n):(i+train.n+pred.n-1)]
-    error[i-shift+1] = logMSE(train, test)
+    error[i-shift+1] = train - test
+    preds[i-shift+1] = train
   }
-  return(error)
+  return(list(error, preds))
 }
 
 # rollingEnetPredict
@@ -68,10 +70,11 @@ rollingPrevVol <- function(y, train.n, pred.n, shift) {
 # y - vector, response
 # train.n - number of training examples in window 
 # pred.n - number of periods ahead to forecast
+# alph - alpha parameter for elastic net
 #
 # train.n + pred.n must not exceed length(y)
 
-rollingEnetPredict <- function(x, y, train.n, pred.n) {
+rollingEnetPredict <- function(x, y, train.n, pred.n, alph) {
   library(glmnet)
   library(doParallel)
   registerDoParallel(4)
@@ -86,10 +89,10 @@ rollingEnetPredict <- function(x, y, train.n, pred.n) {
     train.y = y[i:(i+train.n-1)]
     test.y = y[(i+train.n):(i+train.n+pred.n-1)]
     enetreg = cv.glmnet(x=train.x, y=train.y, family="gaussian",
-                        alpha=1)
+                        alpha=alph)
     enetreg.pred = predict(enetreg, newx=as.matrix(test.x),
                            s="lambda.min")
-    error[i] = logMSE(enetreg.pred, test.y)
+    error[i] = enetreg.pred - test.y
     preds[i] = enetreg.pred
     coefs = coef(enetreg, s="lambda.min")
     coefs = names(coefs[coefs[,1] != 0,])
@@ -118,7 +121,7 @@ rollingGBMPredict <- function(x, y, train.n, pred.n) {
     gb = gbm(train.y~.,data=train.x,distribution="gaussian",n.trees=100,
              interaction.depth=1,shrinkage=.001)
     gb.pred = predict(rf, test.x)
-    error[i] = logMSE(gb.pred, test.y)
+    error[i] = gb.pred - test.y
   }    
   return(error)
 }
@@ -142,7 +145,7 @@ rollingMARSPredict <- function(x, y, train.n, pred.n) {
     test.y = y[(i+train.n):(i+train.n+pred.n-1)]
     mareg = mars(train.x, train.y,)
     mareg.pred = predict(mareg, test.x)
-    error[i] = logMSE(mareg.pred, test.y)
+    error[i] = mareg.pred - test.y
   }    
   return(error)
 }
@@ -168,7 +171,7 @@ rollingRFPredict <- function(x, y, train.n, pred.n) {
     test.y = y[(i+train.n):(i+train.n+pred.n-1)]
     rf = randomForest(train.x, train.y, ntree=1000, mtry=10)
     rf.pred = predict(rf, test.x)
-    error[i] = logMSE(rf.pred, test.y)
+    error[i] = rf.pred - test.y
     preds[i] = rf.pred
     impor = importance(rf)
     inds = which(impor == max(impor),arr.ind=T)
@@ -196,7 +199,7 @@ rollingSVMPredict <- function(x, y, train.n, pred.n) {
     test.y = y[(i+train.n):(i+train.n+pred.n-1)]
     svec = svm(train.x, train.y,type="eps",kernel="linear")
     svec.pred = predict(svec, test.x)
-    error[i] = mean((svec.pred - test.y)^2)
+    error[i] = svec.pred - test.y
   }    
   return(error)
 }
@@ -229,7 +232,7 @@ rollingDeepPredict <- function(x, y, train.n, pred.n) {
     deep.pred = h2o.predict(deep, test.x)
     deep.pred = as.data.frame(deep.pred)$predict
     test.y = as.data.frame(test.y)$test.y
-    error[i] = mean((deep.pred - test.y)^2)
+    error[i] = deep.pred - test.y
   }    
   return(error)
 }

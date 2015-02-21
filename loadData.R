@@ -49,7 +49,7 @@ bb.dtm <- DocumentTermMatrix(bb.docs)
 bb.corrs <- apply(bb.dtm,2,function(x){cor(x,sp500.vol)})
 bb.max.corrs <- bb.corrs[abs(bb.corrs) > 0.1]  # correlation cutoff
 bb.dtm.mcorr <- bb.dtm[,names(bb.max.corrs)]
-#dtm <- removeSparseTerms(bb.dtm, 1)
+bb.dtm.rems <- removeSparseTerms(bb.dtm, .9)
 
 bb.tf <- colSums(as.matrix(bb.dtm))
 bb.tf.order <- bb.tf[order(bb.tf, decreasing=T)]
@@ -58,6 +58,17 @@ bb.tfidf <- weightTfIdf(bb.dtm)
 bb.tfidf.corrs <- apply(bb.tfidf,2,function(x){cor(x,sp500.vol)})
 bb.tfidf.max.corrs <- bb.tfidf.corrs[abs(bb.tfidf.corrs) > 0.1]  # correlation cutoff                                                    
 bb.tfidf.mcorr <- bb.tfidf[,Filter(function(x){!is.na(x)},names(bb.tfidf.max.corrs))]
+
+# simple autoregression
+# bb.auto.dtm <- cbind(as.matrix(bb.dtm[2:nrow(bb.dtm),]), sp500.vol[-length(sp500.vol)])
+# colnames(bb.auto.dtm)[ncol(bb.auto.dtm)] = "prev.vol"
+# bb.auto.dtm.mcorr <- cbind(as.matrix(bb.dtm.mcorr[2:nrow(bb.dtm.mcorr),]), sp500.vol[-length(sp500.vol)])
+# colnames(bb.auto.dtm.mcorr)[ncol(bb.auto.dtm.mcorr)] = "prev.vol"
+# bb.auto.tfidf <- cbind(as.matrix(bb.tfidf[2:nrow(bb.tfidf),]), sp500.vol[-length(sp500.vol)])
+# colnames(bb.auto.tfidf)[ncol(bb.auto.tfidf)] = "prev.vol"
+# bb.auto.tfidf.mcorr <- cbind(as.matrix(bb.tfidf.mcorr[2:nrow(bb.tfidf.mcorr),]), sp500.vol[-length(sp500.vol)])
+# colnames(bb.auto.tfidf.mcorr)[ncol(bb.auto.tfidf.mcorr)] = "prev.vol"
+# bb.auto.dates <- beigebook$Date[2:length(beigebook$Date)] 
 
 #day.diff = rep(NA, length(beigebook$Date)-1)
 #for (i in 2:length(beigebook$Date)) {

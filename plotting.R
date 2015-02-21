@@ -13,7 +13,8 @@ boxplotCompare <- function(errors) {
 summaryTable <- function(errors) {
   # errors - data frame, each column is error series of different method
   Variance <- apply(errors, 2, var)
-  xtable(cbind(t(apply(errors, 2, summary)), Variance), digits=4)
+  MSE <- apply(errors, 2, function(x){mean(x^2)})
+  xtable(cbind(MSE, Variance), digits=4)
 }
 
 errorPlotCompare <- function(errors, dates, from=NULL, to=NULL) {
@@ -28,7 +29,7 @@ errorPlotCompare <- function(errors, dates, from=NULL, to=NULL) {
   if (!is.null(from) & !is.null(to))
     errors.ts <- subset(errors.ts, Date >= from & Date <= to)
   ggplot(errors.ts, aes(x=Date,y=value,color=variable,group=variable)) + geom_line() +
-    ylab("MSE") + theme(legend.position="bottom")  
+    ylab("MSE") + theme(legend.position="bottom") + scale_color_brewer(palette="Set1")
 }
 
 versusRealityPlot <- function(dates, preds, reality) {
@@ -40,5 +41,5 @@ versusRealityPlot <- function(dates, preds, reality) {
   colnames(dat)[1:2] <- c("Date", "Volatility")
   dat <- melt(dat, id="Date")
   ggplot(dat, aes(x=Date,y=value,color=variable,group=variable)) + geom_line() +
-    ylab("Volatility") + theme(legend.position="bottom")  
+    ylab("Volatility") + theme(legend.position="bottom") + scale_color_brewer(palette="Set1")
 }
