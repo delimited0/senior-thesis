@@ -33,6 +33,12 @@ pa.forc <- ugarchforecast(pa.garch.1.1, n.ahead=1, n.roll=length(ftse.vol)-train
 bb.garch.1.1 <- ugarchfit(spec=spec, data=sp500.vol, solver='hybrid', out.sample=length(sp500.vol)-train.n)
 bb.forc <- ugarchforecast(pa.garch.1.1, n.ahead=1, n.roll=length(sp500.vol)-train.n)
 
+ba.garch.1.1 <- ugarchfit(spec=spec, data=barron.vol, solver='hybrid', out.sample=length(barron.vol)-100)
+ba.forc <- ugarchforecast(ba.garch.1.1, n.ahead=1, n.roll=length(barron.vol)-100)
+
+ferc.garch.1.1 <- ugarchfit(spec=spec, data=ferc.vol, solver='hybrid', out.sample=length(ferc.vol)-500)
+ferc.forc <- ugarchforecast(ferc.garch.1.1, n.ahead=1, n.roll=length(ferc.ovl)-1000)
+
 # AR(I)MAX
 arimax.preds <- c()
 for (i in train.n:(length(ftse.vol)-1)) {

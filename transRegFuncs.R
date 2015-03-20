@@ -12,7 +12,11 @@ lagBatchBuilder <- function(dtm, delta) {
   # returns as matrix
   dtm <- as.matrix(dtm)
   dtm.lag <- matrix(nrow=nrow(dtm)-delta+1, ncol=delta*ncol(dtm))
-  word.names <- rep(colnames(dtm), delta)
+  word.names <- c()
+  for (i in 1:delta) {
+    word.names <- c(word.names, 
+                    sapply(colnames(dtm), function(x) {paste(x, i, sep=".")}))
+  }
   for (i in (delta):nrow(dtm)) {
     obs <- c(dtm[i:(i-delta+1),])
     dtm.lag[i-delta+1,] <- obs
@@ -36,6 +40,7 @@ glmnetBatchReg <- function(dtm.batch, vol, delta, alpha, train.n, val.n=1, cv=F)
   val.errors <- matrix(nrow=val.n, ncol=length(alpha))
   
   if (cv) {
+    val.start <- Sys.time()
     val.n <- 0
     cv.errors <- matrix(nrow=train.n, ncol=length(alpha))
     train.x <- dtm.batch[1:train.n,]
@@ -52,26 +57,42 @@ glmnetBatchReg <- function(dtm.batch, vol, delta, alpha, train.n, val.n=1, cv=F)
     }
     mses <- apply(val.errors, 2, function(x){mean(x^2)})
     alpha.opt <- alpha[which.min(mses)]
+    val.end <- Sys.time()
+    print(paste("Validation time:", val.end-val.start))
   }
   else {
-    idx <- 1
-    for (a in alpha) {
-      glmnet.fit <- cv.glmnet(x=dtm.batch[1:train.n,], y=vol[1:train.n], family="gaussian", 
-                              alpha=a, parallel=TRUE)
-      glmnet.pred <- predict(glmnet.fit, dtm.batch[(train.n+1):(train.n+val.n),], s="lambda.min")
-      errors <- glmnet.pred - vol[(train.n+1):(train.n+val.n)]
-      val.errors[,idx] <- errors
-      idx <- idx + 1
+    if (length(alpha) > 1) {
+      val.start <- Sys.time()
+      idx <- 1
+      for (a in alpha) {
+        glmnet.fit <- cv.glmnet(x=dtm.batch[1:train.n,], y=vol[1:train.n], family="gaussian", 
+                                alpha=a, parallel=TRUE)
+        glmnet.pred <- predict(glmnet.fit, dtm.batch[(train.n+1):(train.n+val.n),], s="lambda.min")
+        errors <- glmnet.pred - vol[(train.n+1):(train.n+val.n)]
+        val.errors[,idx] <- errors
+        idx <- idx + 1
+      }
+      mses <- apply(val.errors, 2, function(x){mean(x^2)})
+      alpha.opt <- alpha[which.min(mses)]
+      val.end <- Sys.time()
+      print(paste("Validation time:", val.end-val.start))
     }
-    mses <- apply(val.errors, 2, function(x){mean(x^2)})
-    alpha.opt <- alpha[which.min(mses)]
+    else {
+      alpha.opt <- alpha
+      mses <- NULL
+    }
   }
+  fit.start <- proc.time()
   glmnet.fit <- cv.glmnet(x=dtm.batch[1:(train.n+val.n),], 
                           y=vol[1:(train.n+val.n)], family="gaussian", 
                           alpha=alpha.opt, parallel=TRUE)
+  fit.end <- proc.time()
+  print(paste("Training time:", (fit.end-fit.start)['elapsed']))
   glmnet.pred <- predict(glmnet.fit, dtm.batch[(train.n+val.n+1):nrow(dtm.batch),], s="lambda.min")
   errors <- glmnet.pred - vol[(train.n+val.n+1):length(vol)]
-  
+  dates <- names(vol[(train.n+val.n+1):length(vol)])
+  names(glmnet.pred) <- dates
+  names(errors) <- dates
   return(list(errors=errors, preds=glmnet.pred, alpha=alpha.opt, fit=glmnet.fit, mses=mses))
 }
 

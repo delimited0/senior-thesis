@@ -1,11 +1,4 @@
 # Load and pre-process Beigebook and S&P 500 thesis data
-
-dateFix <- function(x, year=1949){
-  m <- year(x) %% 100
-  year(x) <- ifelse(m > year %% 100, 1900+m, 2000+m)
-  x
-}
-
 setwd("~/Documents/Thesis")
 source('code/volFuncs.R')
 
@@ -13,7 +6,7 @@ sp500 <- read.csv("data/sp500.csv")
 sp500 <- sp500[nrow(sp500):1,]  # reverse data
 sp500$Date <- dateFix(as.Date(sp500$Date, "%m/%d/%y"))
 rownames(sp500) <- NULL
-beigebook <- read.csv("data/beigebook.csv")
+beigebook <- read.csv("data/BB/beigebook.csv")
 beigebook$Date <- as.Date(beigebook$Date, "%m/%d/%y")
 
 # calculate volatility

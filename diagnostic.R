@@ -1,4 +1,4 @@
-# plotting and reporting functions
+# diagnostic, plotting and reporting functions
 
 boxplotCompare <- function(errors) {
   # errors - data frame, each column is error series of different method
@@ -17,7 +17,7 @@ summaryTable <- function(errors) {
   xtable(cbind(MSE, Variance), digits=4)
 }
 
-errorPlotCompare <- function(errors, dates, from=NULL, to=NULL) {
+errorPlotCompare <- function(dates, errors, from=NULL, to=NULL) {
   # errors - data frame, each column is error series of different method
   # dates - vector, dates of observations
   # from - date value, start date
@@ -29,7 +29,7 @@ errorPlotCompare <- function(errors, dates, from=NULL, to=NULL) {
   if (!is.null(from) & !is.null(to))
     errors.ts <- subset(errors.ts, Date >= from & Date <= to)
   ggplot(errors.ts, aes(x=Date,y=value,color=variable,group=variable)) + geom_line() +
-    ylab("MSE") + theme(legend.position="bottom") + scale_color_brewer(palette="Set1")
+    ylab("Squared Error") + theme(legend.position="bottom") + scale_color_brewer(palette="Set1")
 }
 
 versusRealityPlot <- function(dates, preds, reality) {
@@ -42,4 +42,15 @@ versusRealityPlot <- function(dates, preds, reality) {
   dat <- melt(dat, id="Date")
   ggplot(dat, aes(x=Date,y=value,color=variable,group=variable)) + geom_line() +
     ylab("Volatility") + theme(legend.position="bottom") + scale_color_brewer(palette="Set1")
+}
+
+glmnetCoefs <- function(fit, l.choice="lambda.min") {
+  # fit - model fit from call to glmnet
+  # l.choice - string, choice of lambda
+  coefs <- coef(fit, s=l.choice)
+  coef.names <- rownames(coefs)
+  nonzero <- which(coefs > 0)
+  coef.names <- coef.names[nonzero]
+  coefs <- as.vector(coefs)[nonzero]
+  return(data.frame(coef.names, coefs, stringsAsFactors=FALSE))
 }
