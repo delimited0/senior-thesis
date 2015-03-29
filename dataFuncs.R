@@ -125,10 +125,28 @@ combineArticles <- function(dat.frame) {
   issue.articles <- rep(NA, length(dates))
   idx <- 0
   for (d in dates) {
-    issue.heads[idx] <- paste(dat.frame[dat.frame$Date == d,]$Headline, collapse="")
-    issue.articles[idx] <- paste(dat.frame[dat.frame$Date == d,]$Text, collapse="")
+    issue.heads[idx] <- paste(dat.frame[dat.frame$Date == d,]$Headline, collapse=" ")
+    issue.articles[idx] <- paste(dat.frame[dat.frame$Date == d,]$Text, collapse=" ")
     idx <- idx + 1
   }
   issues <- data.frame(Date=dates, Headlines=issue.heads, Text=issue.articles, 
                        stringsAsFactors=FALSE)
+}
+
+prepText <- function(docs, rem=NULL) {
+  # takes and returns corpus
+  toSpace <- content_transformer(function(x, pattern) gsub(pattern, " ", x))
+  removeURL <- content_transformer(function(x, pattern) gsub(pattern, "", x))
+  docs <- tm_map(docs, content_transformer(tolower), lazy=T)
+  docs <- tm_map(docs, removeNumbers, lazy=T)
+  docs <- tm_map(docs, removeURL, "http://.*\\.html")
+  docs <- tm_map(docs, removeURL, "www\\..*\\.[com,net]")
+  docs <- tm_map(docs, removeURL, "http://.*\\.com")
+  docs <- tm_map(docs, toSpace, "-|/")
+  docs <- tm_map(docs, removePunctuation, lazy=T)
+  docs <- tm_map(docs, removeWords, stopwords("english"), lazy=T)
+  if (!is.null(rem))
+    docs <- tm_map(docs, removeWords, rem, lazy=T)
+  docs <- tm_map(docs, stripWhitespace, lazy=T)
+  docs <- tm_map(docs, stemDocument, lazy=T)
 }

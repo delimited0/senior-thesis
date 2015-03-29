@@ -1,5 +1,8 @@
 source('code/dataFuncs.R')
 source('code/volFuncs.R')
+library('topicmodels')
+library('NMF')
+library('gmodels')
 
 files <- list.files("data/BarronsAdvisory/", pattern="data*", full.names=TRUE)
 
@@ -17,30 +20,24 @@ barron.vol <- interVol(sp500$Adj.Close, sp500$Date, dat.Barron$Date)
 dat.Barron <- dat.Barron[dat.Barron$Date %in% as.Date(names(barron.vol)),]
 
 barron.docs <- Corpus(VectorSource(dat.Barron$Text))
-barron.docs <- tm_map(barron.docs, content_transformer(tolower), lazy=T)
-barron.docs <- tm_map(barron.docs, removeNumbers, lazy=T)
-barron.docs <- tm_map(barron.docs, removePunctuation, lazy=T)
-barron.docs <- tm_map(barron.docs, removeWords, stopwords("english"), lazy=T)
-barron.docs <- tm_map(barron.docs, stripWhitespace, lazy=T)
-barron.docs <- tm_map(barron.docs, stemDocument, lazy=T)
-barron.docs <- tm_map(barron.docs, removeWords, c("the"), lazy=T)
+barron.docs <- prepText(barron.docs)
 barron.dtm <- DocumentTermMatrix(barron.docs)
+rownames(barron.dtm) <- dat.Barron$Date
 barron.tfidf <- weightTfIdf(barron.dtm)
-barron.rem.dtm <- removeSparseTerms(barron.dtm, .95)
+barron.rem.dtm <- removeSparseTerms(barron.dtm, .975)
+barron.rem.tfidf <- weightTfIdf(barron.rem.dtm)
+#barron.dtm <- log(as.matrix(barron.dtm)+1)
+
+# clean up
+rm(dat.Barron)
     
 # choose optimal number of topics
-# 6 minimizes perplexity, maximizes likelihood
-# perps <- c()
-# logliks <- c()
-# ks <- 2:8
-# for (k in ks) {
-#   print(paste("Testing",k,"topics"))
-#   barron.lda <- LDA(barron.rem.dtm, k, method="VEM") 
-#   perps <- c(perps, perplexity(barron.lda))
-#   logliks <- c(logliks, logLik(barron.lda))
-# }
-# barron.lda <- LDA(barron.rem.dtm, 6, method="VEM")
-barron.remlda.dtm <- cbind(as.matrix(barron.rem.dtm), as.factor(topics(barron.lda)))
+# 3 minimizes perplexity, maximizes likelihood
+k <- pickK(barron.dtm, 2:10, method="VEM")
+barron.lda <- LDA(barron.dtm, 5, method="VEM")
+barron.topics <- as.factor(topics(barron.lda))
+barron.dtm <- cbind(as.matrix(barron.dtm), barron.topics)
+rm(barron.topics)
 
 # get sentiment of each document (takes a while)
 sents <- rep(NA, length(dat.Barron$Text))
@@ -49,3 +46,14 @@ for (i in 1:length(dat.Barron$Text)) {
 }
 
 barron.sent.dtm <- cbind(as.matrix(barron.rem.dtm), sents)
+
+# nmf
+barron.nnmf <- nnmf(as.matrix(barron.dtm), 10)
+barron.dtm <- cbind(as.matrix(barron.dtm), barron.nnmf$W)
+
+# pca
+barron.pca <- fast.prcomp(barron.dtm)
+plot(barron.pca, type="lines")
+
+# cca
+barron.cca <- cancor(barron.dtm)

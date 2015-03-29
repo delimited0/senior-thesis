@@ -2,8 +2,12 @@
 # various rolling regression functions
 
 library(glmnet)
+library(e1071)
+library(gcdnet)
 library(doParallel)
 registerDoParallel(4)
+library(rugarch)
+library(gmodels)
 
 # MSE
 # calculate MSE given actual and predicted values
@@ -32,19 +36,19 @@ logMSE <- function(pred, actual) {
 #
 # train.n + pred.n must not exceed length(y)
 
-rollingPredict <- function(x, y, train.n, pred.n, method) {
-  error <- rep(NA, length(y) - train.n - pred.n)
-  for (i in 1:(length(y)-train.n-pred.n+1)) {
-    train.x <- x[i:(i+train.n-1),]
-    test.x <- x[(i+train.n):(i+train.n+pred.n-1),,drop=F]
-    train.y <- y[i:(i+train.n-1)]
-    test.y <- y[(i+train.n):(i+train.n+pred.n-1)]
-    model <- eval(parse(text=method)) 
-    model.pred <- predict(model, test.x)
-    error[i] <- model.pred - test.y
-  }
-  return(error)
-}
+# rollingPredict <- function(x, y, train.n, pred.n, method) {
+#   error <- rep(NA, length(y) - train.n - pred.n)
+#   for (i in 1:(length(y)-train.n-pred.n+1)) {
+#     train.x <- x[i:(i+train.n-1),]
+#     test.x <- x[(i+train.n):(i+train.n+pred.n-1),,drop=F]
+#     train.y <- y[i:(i+train.n-1)]
+#     test.y <- y[(i+train.n):(i+train.n+pred.n-1)]
+#     model <- eval(parse(text=method)) 
+#     model.pred <- predict(model, test.x)
+#     error[i] <- model.pred - test.y
+#   }
+#   return(error)
+# }
 
 rollingPrevVol <- function(y, train.n, pred.n, shift) {
   # rollingPrevVol
@@ -70,33 +74,159 @@ rollingPrevVol <- function(y, train.n, pred.n, shift) {
   return(list(errors=error, preds=preds))
 }
 
-rollingEnetPredict <- function(x, y, train.n, alpha, freq) {
+rollingEnetPredict <- function(x, y, delta, train.n, alpha, freq, pf=NULL) {
   # rollingEnetPredict - rolling forecasts, refitting
   # x - matrix, features
   # y - vector, response
   # train.n - number of starting training examples
   # alpha - alpha parameter for elastic net
   # freq - integer, number of observations before retraining
+  y = y[-(1:(delta-1))]
   errors = rep(NA, length(y) - train.n)
   preds = rep(NA, length(y) - train.n)
-#   glmnet.fit = cv.glmnet(x=x[1:train.n,], y=y[1:train.n], family="gaussian",
-#                           alpha=alpha, parallel=TRUE)
+  dates = names(y[(train.n+1):length(y)])
+  if (is.null(pf))
+    pf = rep(1, ncol(x))
   fits = list()
+  fit.idx = 1
   for (i in seq(from=(train.n+1), to=length(y), by=freq)) {
-    print(paste("Training up to observation", i))
-    train.idx = 1:i
-    glmnet.fit = cv.glmnet(x=x[train.idx,], y=y[train.idx], 
-                           family="gaussian", alpha=alpha, parallel=TRUE)
-    fits = c(fits, glmnet.fit)
+    print(paste("Training up to observation", i-1))
+    train.idx = 1:(i-1)
+    glmnet.fit = cv.glmnet(x=x[train.idx,], y=y[train.idx], family="gaussian",
+                           alpha=alpha, parallel=TRUE, penalty.factor=pf)
+    fits[[fit.idx]] = glmnet.fit
+    fit.idx = fit.idx + 1
     idx = i:(min((i+freq-1), length(y)))
     glmnet.pred = predict(glmnet.fit, newx=x[idx,], 
                           s="lambda.min")
     preds[idx-train.n] = glmnet.pred
     errors[idx-train.n] = glmnet.pred - y[idx]
   }
-     
+  names(preds) = dates
+  names(errors) = dates   
+
   return(list(errors=errors,preds=preds,fits=fits))
 }
+
+rollingADL = function(x, y, delta, train.n, freq) {
+  y = y[-(1:(delta-1))]
+  errors = rep(NA, length(y) - train.n)
+  preds = rep(NA, length(y) - train.n)
+  dates = names(y[(train.n+1):length(y)]) 
+  fits = list()
+  fit.idx = 1
+  for (i in seq(from=(train.n+1), to=length(y), by=freq)) {
+    #print(paste("Training up to observation", i))
+    train.idx = 1:(i-1)
+    if (!is.null(dim(x)))
+      lm.fit = lm(y[train.idx] ~ x[train.idx,])
+    else
+      lm.fit = lm(y[train.idx] ~ x[train.idx])
+    fits[[fit.idx]] = lm.fit
+    fit.idx = fit.idx + 1
+    idx = i:(min((i+freq-1), length(y)))
+    if (!is.null(dim(x)))
+      lm.pred = x[idx,] %*% coef(lm.fit)[-1] + coef(lm.fit)[1]
+    else
+      lm.pred = coef(lm.fit)[-1] * x[idx] + coef(lm.fit)[1]
+    preds[idx-train.n] = lm.pred
+    errors[idx-train.n] = lm.pred - y[idx]
+  }
+  names(preds) = dates
+  names(errors) = dates
+  
+  return(list(errors=errors, preds=preds, fits=fits))
+}
+
+rollingSVMPredict <- function(x, y, train.n, kernel, gamma, cost, freq) {
+  # rollingSVMPredict - rolling SVM predictions
+  # x - matrix, features
+  # y - response
+  # train.n - number of training examples in window 
+  errors = rep(NA, length(y) - train.n)
+  preds = rep(NA, length(y) - train.n)
+  dates <- names(y[(train.n+1):length(y)])
+  fits = list()
+  for (i in seq(from=(train.n+1), to=length(y), by=freq)) {
+    print(paste("Training up to observation", i))
+    train.idx = 1:i
+    svm.fit = svm(x=x[train.idx,], y=y[train.idx], type="eps", kernel=kernel,
+                  gamma=gamma, cost=cost)
+    fits = list(fits, svm.fit)
+    idx = i:(min((i+freq-1), length(y)))
+    svm.pred = predict(svm.fit, newdata=x[idx,])
+    preds[idx-train.n] = svm.pred
+    errors[idx-train.n] = svm.pred - y[idx]
+  }
+  names(preds) = dates
+  names(errors) = dates
+  return(list(errors=errors,preds=preds,fits=fits[[-1]]))
+}
+
+rollingGCDnetPredict <- function(x, y, train.n, method, lambda2, 
+                                 pf=NULL, pf2=NULL, freq, window=NULL) {
+  errors = rep(NA, length(y) - train.n)
+  preds = rep(NA, length(y) - train.n)
+  fits = list()
+  if (is.null(pf)) pf = rep(1, ncol(x))
+  if (is.null(pf2)) pf2 = rep(1, ncol(x))
+  for (i in seq(from=(train.n+1), to=length(y), by=freq)) {
+    if (is.null(window))
+      train.idx = 1:(i-1)
+    else
+      train.idx = min(1, i-window):i
+    print(paste("Training from", min(train.idx), "to", max(train.idx)))
+    gcdnet.fit = cv.gcdnet(x=x[train.idx,], y=y[train.idx], method=method,
+                           lambda2=lambda2, pf=pf, pf2=pf2)
+    fits = list(fits, gcdnet.fit)
+    idx = i:(min((i+freq-1), length(y)))
+    gcdnet.pred = predict(gcdnet.fit, newx=x[idx,], 
+                          s="lambda.min")
+    preds[idx-train.n] = gcdnet.pred
+    errors[idx-train.n] = gcdnet.pred - y[idx]
+  }  
+  names(preds) = dates
+  names(errors) = dates   
+
+  return(list(errors=errors,preds=preds,fits=fits[[-1]]))
+}
+
+rollingGARCH <- function(y, train.n, freq, model="sGARCH", submodel=NULL,
+                     solver="hybrid", var.xreg=NULL, mean.xreg=NULL) {
+  errors = rep(NA, length(y) - train.n)
+  preds = rep(NA, length(y) - train.n)
+  dates <- names(y[(train.n+1):length(y)])
+  
+  fits <- list()
+  fits.idx <- 1
+  for (i in seq(from=(train.n+1), to=length(y), by=freq)) {
+    print(paste("Training up to observation", i-1))
+    spec <- ugarchspec(variance.model = list(model=model,
+                                             garchOrder=c(1,1),
+                                             submodel=submodel,
+                                             external.regressors=var.xreg),
+                       mean.model     = list(armaOrder=c(1,1),
+                                             include.mean=TRUE,
+                                             external.regressors=mean.xreg),
+                       distribution.model = "norm")
+    train.idx = 1:(i-1)
+    test.idx = i:min((i+freq-1), length(y))
+    all.idx <- c(train.idx, test.idx)
+    garch <- ugarchfit(spec=spec, data=y[all.idx], solver=solver, 
+                       out.sample=length(test.idx))
+    fits[[fits.idx]] <- garch
+    fits.idx <- fits.idx + 1
+    forc <- ugarchforecast(garch, n.ahead=1, n.roll=length(test.idx))
+    garch.pred <- fitted(forc)[-1]
+    idx = i:(min((i+freq-1), length(y)))
+    preds[idx-train.n] = garch.pred
+    errors[idx-train.n] = garch.pred - y[idx]
+  }
+  names(preds) <- dates
+  names(errors) <- dates
+  return(list(errors=errors,preds=preds,fits=fits))
+}
+ 
 # 
 # # rollingGBMPredict
 # # rolling gbm predictions
@@ -177,29 +307,9 @@ rollingEnetPredict <- function(x, y, train.n, alpha, freq) {
 #   return(list(error,varlist,preds))
 # }
 # 
-# # rollingSVMPredict
-# # rolling SVM predictions
-# # x - matrix, features
-# # y - response
-# # train.n - number of training examples in window 
-# # pred.n - number of periods ahead to forecast
-# #
-# # train.n + pred.n must not exceed length(y)
-# 
-# rollingSVMPredict <- function(x, y, train.n, pred.n) {
-#   library("e1071", lib.loc="/Library/Frameworks/R.framework/Versions/3.1/Resources/library")
-#   error = rep(NA, length(y) - train.n - pred.n)
-#   for (i in 1:(length(y)-train.n-pred.n+1)) {
-#     train.x = x[i:(i+train.n-1),]
-#     test.x = x[(i+train.n):(i+train.n+pred.n-1),,drop=F]
-#     train.y = y[i:(i+train.n-1)]
-#     test.y = y[(i+train.n):(i+train.n+pred.n-1)]
-#     svec = svm(train.x, train.y,type="eps",kernel="linear")
-#     svec.pred = predict(svec, test.x)
-#     error[i] = svec.pred - test.y
-#   }    
-#   return(error)
-# }
+
+
+
 # 
 # # rollingDeepPredict
 # # rolling deep learning predictions

@@ -49,8 +49,23 @@ glmnetCoefs <- function(fit, l.choice="lambda.min") {
   # l.choice - string, choice of lambda
   coefs <- coef(fit, s=l.choice)
   coef.names <- rownames(coefs)
-  nonzero <- which(coefs > 0)
+  nonzero <- which(coefs != 0)
   coef.names <- coef.names[nonzero]
   coefs <- as.vector(coefs)[nonzero]
   return(data.frame(coef.names, coefs, stringsAsFactors=FALSE))
+}
+
+errors <- function(fit.errors, fit.preds=NULL, reality=NULL) {
+  # reality - the whole vector of realized volatility
+  reality <- reality[names(reality) %in% names(fit.preds)]
+  mse <- mean(fit.errors^2)
+  mae <- mean(abs(fit.errors))
+  if (!is.null(fit.preds)) {
+    ql <- mean(fit.preds/reality - log(fit.preds/reality) - 1)
+    errors <- data.frame(MSE=mse, MAE=mae, QL=ql)
+  }
+  else {
+    errors <- data.frame(MSE=mse, MAE=mae)
+  }
+  return(errors)
 }

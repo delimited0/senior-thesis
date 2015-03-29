@@ -10,6 +10,7 @@ lagBatchBuilder <- function(dtm, delta) {
   # dtm - DocumentTermMatrix
   # delta - integer, window size
   # returns as matrix
+  if (delta == 1) return(dtm)
   dtm <- as.matrix(dtm)
   dtm.lag <- matrix(nrow=nrow(dtm)-delta+1, ncol=delta*ncol(dtm))
   word.names <- c()
@@ -24,6 +25,63 @@ lagBatchBuilder <- function(dtm, delta) {
   }
   colnames(dtm.lag) <- word.names
   return(dtm.lag)
+}
+
+lagVolBuilder <- function(vol, delta) {
+  dat <- matrix(nrow=length(vol), ncol=delta)
+  for (i in 1:delta) {
+    dat <- dat[-1,]
+    if (!is.null(dim(dat)))
+      dat[,i] <- head(vol, -i)
+    else
+      dat <- head(vol, -i)
+  }
+  if (!is.null(dim(dat)))
+    colnames(dat) <- sapply(1:delta, function(x){paste("vol.lag.", x, sep="")})
+  return(dat)
+}
+
+autoLagBuilder <- function(dtm.delta, vol.delta, dtm, vol) {
+  # dtm.delta - how many text releases back
+  # vol.delta - how many auto regressors
+  dtm.lagged <- lagBatchBuilder(dtm, dtm.delta)
+  vol.lagged <- lagVolBuilder(vol, vol.delta)
+  if (!is.null(nrow(vol.lagged)))
+    vol.len <- nrow(vol.lagged)
+  else
+    vol.len <- length(vol.lagged)
+  len.diff <- abs(nrow(dtm.lagged) - vol.len)
+  if (nrow(dtm.lagged) > vol.len) 
+    dtm.lagged <- dtm.lagged[-(1:len.diff),]
+  else if (nrow(dtm.lagged) < vol.len)
+    vol.lagged <- vol.lagged[-(1:len.diff)]
+  return(cbind(dtm.lagged, vol.lagged))
+}
+
+lagSearch.glmnet <- function(dtm, vol, dtm.lags, vol.lags, alpha, train.n,
+                             loss="MSE") {
+  error.mat <- matrix(nrow=length(dtm.lags), ncol=length(vol.lags))
+  rownames(error.mat) <- dtm.lags
+  colnames(error.mat) <- vol.lags
+  for (d in 1:length(dtm.lags)) {
+    for (v in 1:length(vol.lags)) {
+      print(paste("d.lag:", d, "v.lag:", v))
+      dlag <- dtm.lags[d]
+      vlag <- vol.lags[v]
+      x <- autoLagBuilder(dlag, vlag, dtm, vol)
+      if (vlag >= dlag) delta <- vlag+1
+      else delta <- dlag
+      result <- glmnetBatchReg(as.matrix(x), vol, delta, alpha, train.n, val.n=0)
+      err <- errors(result$errors, result$preds, vol)
+      error.mat[d,v] <- unlist(err[loss])
+      if (error.mat[d,v] == min(error.mat[d,v], na.rm=TRUE)) {
+        best.res <- result
+        best.d <- d
+        best.v <- v
+      }
+    }
+  }
+  return(list(Best=best.res, Dlag=best.d, Vlag=best.v, errors=error.mat))
 }
 
 glmnetBatchReg <- function(dtm.batch, vol, delta, alpha, train.n, val.n=1, cv=F) {
@@ -97,20 +155,58 @@ glmnetBatchReg <- function(dtm.batch, vol, delta, alpha, train.n, val.n=1, cv=F)
 }
 
 svmBatchReg <- function(dtm.batch, vol, delta, kernel, degree=3, gamma, coef0=0, cost,
-                        train.n, val.n) {
-  vol <- vol[-(1:(delta-1))]
+                        train.n, val.n, diff=FALSE, r.vol=NULL) {
+  if (!diff) vol <- vol[-(1:(delta-1))]
   
-  tune.res <- tune.svm(x=dtm.batch[1:train.n,], y=vol[1:train.n], kernel=kernel, 
-                       validation.x=dtm.batch[(train.n+1):(train.n+val.n),],
-                       validation.y=vol[(train.n+1):(train.n+val.n)],
-                       gamma=gamma, cost=cost)
-  gamma.opt <- tune.res$best.parameters$gamma
-  cost.opt <- tune.res$best.parameters$cost
+  if (val.n > 0) {
+    tune.start <- proc.time()
+    tune.res <- tune.svm(x=dtm.batch[1:train.n,], y=vol[1:train.n], kernel=kernel, 
+                         validation.x=dtm.batch[(train.n+1):(train.n+val.n),],
+                         validation.y=vol[(train.n+1):(train.n+val.n)],
+                         gamma=gamma, cost=cost)
+    tune.end <- proc.time()
+    print(paste("Tuning time:", (tune.end-tune.start)['elapsed']))
+    gamma.opt <- tune.res$best.parameters$gamma
+    cost.opt <- tune.res$best.parameters$cost
+  }
+  else {
+    gamma.opt <- gamma[1]
+    cost.opt <- cost[1]
+  }
+  fit.start <- proc.time()
   svm.fit <- svm(x=dtm.batch[1:(train.n+val.n),], y=vol[1:(train.n+val.n)], kernel=kernel, 
                  gamma=gamma.opt, cost=cost.opt)
+  fit.end <- proc.time()
+  print(paste("Training time:", (fit.end-fit.start)['elapsed']))
   svm.pred <- predict(svm.fit, dtm.batch[(train.n+val.n+1):nrow(dtm.batch),])
-  errors <- svm.pred - vol[(train.n+val.n+1):length(vol)]
-  return(list(errors=errors, preds=svm.pred, fit=svm.fit))
+  dates <- names(vol[(train.n+val.n+1):length(vol)])
+  if (!diff) errors <- svm.pred - vol[(train.n+val.n+1):length(vol)]
+  else {
+    svm.pred <- svm.pred + r.vol[(length(r.vol)-length(svm.pred)):(length(r.vol)-1)]
+    errors <- svm.pred - r.vol[(length(r.vol)-length(svm.pred)+1):length(r.vol)]
+  }
+  names(svm.pred) <- dates
+  names(errors) <- dates
+  return(list(errors=errors, preds=svm.pred, fit=svm.fit, tune=tune.res))
+}
+
+gcdnetBatchReg <- function(dtm.batch, vol, delta, method, lambda2,
+                           pf=NULL, pf2=NULL, train.n) {
+  vol <- vol[-(1:(delta-1))]
+  if (is.null(pf)) pf <- rep(1, ncol(dtm.batch))
+  if (is.null(pf2)) pf2 <- rep(1, ncol(dtm.batch))
+  fit.start <- proc.time()
+  gcdnet.fit <- cv.gcdnet(x=dtm.batch[1:train.n,], y=vol[1:train.n], method=method,
+                          lambda2=lambda2, pf=pf, pf2=pf2)
+  fit.end <- proc.time()
+  print(paste("Training time:", (fit.end-fit.start)['elapsed']))
+  gcdnet.pred <- predict(gcdnet.fit, newx=dtm.batch[(train.n+1):nrow(dtm.batch),], 
+                         s="lambda.min")
+  errors <- gcdnet.pred - vol[(train.n+1):length(vol)]
+  dates <- names(vol[(train.n+1):length(vol)])
+  names(gcdnet.pred) <- dates
+  names(errors) <- dates
+  return(list(errors=errors, preds=gcdnet.pred, fit=gcdnet.fit))
 }
 
 rfBatchReg <- function(dtm.batch, vol, delta, ntree=1000, mtry=10, nodesize=5, 
