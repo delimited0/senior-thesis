@@ -8,6 +8,7 @@ library(doParallel)
 registerDoParallel(4)
 library(rugarch)
 library(gmodels)
+library(forecast)
 
 # MSE
 # calculate MSE given actual and predicted values
@@ -24,31 +25,6 @@ MSE <- function(pred, actual) {
 logMSE <- function(pred, actual) {
   mean((log(pred) - log(actual))^2)
 }
-
-
-# rollingPredict
-# rolling algorithm predictions
-# x - matrix, features
-# y - response
-# train.n - number of training examples in window 
-# pred.n - number of periods ahead to forecast
-# method - string, learning algorithm call
-#
-# train.n + pred.n must not exceed length(y)
-
-# rollingPredict <- function(x, y, train.n, pred.n, method) {
-#   error <- rep(NA, length(y) - train.n - pred.n)
-#   for (i in 1:(length(y)-train.n-pred.n+1)) {
-#     train.x <- x[i:(i+train.n-1),]
-#     test.x <- x[(i+train.n):(i+train.n+pred.n-1),,drop=F]
-#     train.y <- y[i:(i+train.n-1)]
-#     test.y <- y[(i+train.n):(i+train.n+pred.n-1)]
-#     model <- eval(parse(text=method)) 
-#     model.pred <- predict(model, test.x)
-#     error[i] <- model.pred - test.y
-#   }
-#   return(error)
-# }
 
 rollingPrevVol <- function(y, train.n, pred.n, shift) {
   # rollingPrevVol
@@ -74,7 +50,8 @@ rollingPrevVol <- function(y, train.n, pred.n, shift) {
   return(list(errors=error, preds=preds))
 }
 
-rollingEnetPredict <- function(x, y, delta, train.n, alpha, freq, pf=NULL) {
+rollingEnetPredict <- function(x, y, delta, train.n, alpha, freq, pf=NULL,
+                               parallel=FALSE) {
   # rollingEnetPredict - rolling forecasts, refitting
   # x - matrix, features
   # y - vector, response
@@ -82,26 +59,57 @@ rollingEnetPredict <- function(x, y, delta, train.n, alpha, freq, pf=NULL) {
   # alpha - alpha parameter for elastic net
   # freq - integer, number of observations before retraining
   y = y[-(1:(delta-1))]
-  errors = rep(NA, length(y) - train.n)
-  preds = rep(NA, length(y) - train.n)
   dates = names(y[(train.n+1):length(y)])
-  if (is.null(pf))
-    pf = rep(1, ncol(x))
-  fits = list()
-  fit.idx = 1
-  for (i in seq(from=(train.n+1), to=length(y), by=freq)) {
-    print(paste("Training up to observation", i-1))
-    train.idx = 1:(i-1)
-    glmnet.fit = cv.glmnet(x=x[train.idx,], y=y[train.idx], family="gaussian",
-                           alpha=alpha, parallel=TRUE, penalty.factor=pf)
-    fits[[fit.idx]] = glmnet.fit
-    fit.idx = fit.idx + 1
-    idx = i:(min((i+freq-1), length(y)))
-    glmnet.pred = predict(glmnet.fit, newx=x[idx,], 
-                          s="lambda.min")
-    preds[idx-train.n] = glmnet.pred
-    errors[idx-train.n] = glmnet.pred - y[idx]
+  
+  if (!parallel) {
+    errors = rep(NA, length(y) - train.n)
+    preds = rep(NA, length(y) - train.n)
+    if (is.null(pf))
+      pf = rep(1, ncol(x))
+    fits = list()
+    fit.idx = 1
+    for (i in seq(from=(train.n+1), to=length(y), by=freq)) {
+      print(paste("Training up to observation", i-1))
+      train.idx = 1:(i-1)
+      glmnet.fit = cv.glmnet(x=x[train.idx,], y=y[train.idx], family="gaussian",
+                             alpha=alpha, parallel=TRUE, penalty.factor=pf)
+      fits[[fit.idx]] = glmnet.fit
+      fit.idx = fit.idx + 1
+      idx = i:(min((i+freq-1), length(y)))
+      if (length(idx) > 1)
+        glmnet.pred = predict(glmnet.fit, newx=x[idx,], 
+                              s="lambda.min")
+      else
+        glmnet.pred = x[idx,] %*% coef(glmnet.fit)[-1] + coef(glmnet.fit)[1]
+      preds[idx-train.n] = glmnet.pred
+      errors[idx-train.n] = glmnet.pred - y[idx]
+    }
   }
+  else {
+    errors_preds_fits <- foreach(i = seq(from=(train.n+1), to=length(y), by=freq),
+                                 .combine=list, .multicombine=TRUE) %dopar% {
+      print(paste("Training up to observation", i-1))
+      train.idx = 1:(i-1)
+      glmnet.fit = cv.glmnet(x=x[train.idx,], y=y[train.idx], family="gaussian",
+                             alpha=alpha, parallel=TRUE, penalty.factor=pf)
+      idx = i:(min((i+freq-1), length(y)))
+      if (length(idx) > 1)
+        glmnet.pred = predict(glmnet.fit, newx=x[idx,], 
+                              s="lambda.min")
+      else
+        glmnet.pred = x[idx,] %*% coef(glmnet.fit)[-1] + coef(glmnet.fit)[1]
+      list(preds=glmnet.pred, errors=glmnet.pred-y[idx], fit=glmnet.fit)
+    }
+    errors <- c()
+    preds <- c()
+    fits <- list()
+    for (k in 1:length(errors_preds_fits)) {
+      errors <- c(errors, errors_preds_fits[[k]]$errors)
+      preds <- c(preds, errors_preds_fits[[k]]$preds)
+      fits[[k]] <- errors_preds_fits[[k]]$fit
+    }
+  }
+  
   names(preds) = dates
   names(errors) = dates   
 
@@ -136,6 +144,46 @@ rollingADL = function(x, y, delta, train.n, freq) {
   names(errors) = dates
   
   return(list(errors=errors, preds=preds, fits=fits))
+}
+
+rollingPCAADL <- function(x, y, text, delta, train.n, freq, prcomps=2) {
+  y = y[-(1:(delta-1))]
+  text = text[-(1:delta-1),]
+  
+  dates = names(y[(train.n+1):length(y)]) 
+  fits = list()
+  fit.idx = 1
+  errors_preds_fits <- foreach(i = seq(from=(train.n+1), to=length(y), by=freq),
+                               .combine=list, .multicombine=TRUE) %dopar% {
+                     train.idx = 1:(i-1)
+                     test.idx = i:min((i+freq-1), length(y))
+                     train.pca = fast.prcomp(text[train.idx,])
+                     pred.pca = as.matrix(text[test.idx,]) %*% train.pca$rotation[,1:prcomps]
+                     if (!is.null(dim(x))) {
+                       train.x = cbind(x[train.idx,], train.pca$x[,1:prcomps])
+                       test.x = cbind(1, x[test.idx,], pred.pca)
+                     }
+                     else {
+                       train.x = cbind(x[train.idx], train.pca$x[,1:prcomps])
+                       test.x = cbind(1, x[test.idx], pred.pca)
+                     }
+                       
+                     lm.fit = lm(y[train.idx] ~ train.x)
+                     lm.pred = test.x %*% coef(lm.fit)
+                     list(errors=lm.pred-y[test.idx], preds=lm.pred, fit=lm.fit)
+                               }
+  errors <- c()
+  preds <- c()
+  fits <- list()
+  for (k in 1:length(errors_preds_fits)) {
+    errors <- c(errors, errors_preds_fits[[k]]$errors)
+    preds <- c(preds, errors_preds_fits[[k]]$preds)
+    fits[[k]] <- errors_preds_fits[[k]]$fit
+  }
+  names(preds) <- dates
+  names(errors) <- dates
+  
+  return(list(errors=errors,preds=preds,fits=fits))
 }
 
 rollingSVMPredict <- function(x, y, train.n, kernel, gamma, cost, freq) {
@@ -191,43 +239,115 @@ rollingGCDnetPredict <- function(x, y, train.n, method, lambda2,
   return(list(errors=errors,preds=preds,fits=fits[[-1]]))
 }
 
-rollingGARCH <- function(y, train.n, freq, model="sGARCH", submodel=NULL,
-                     solver="hybrid", var.xreg=NULL, mean.xreg=NULL) {
-  errors = rep(NA, length(y) - train.n)
-  preds = rep(NA, length(y) - train.n)
+rollingGARCH <- function(y, ref=NULL, train.n, freq, model="sGARCH", submodel=NULL,
+                     solver="hybrid", var.xreg=NULL, mean.xreg=NULL, ann.fac=1,
+                     prcomps=2, getVar=FALSE, p=1, q=1, r=1, s=1, dist="norm",
+                     target=FALSE) {
   dates <- names(y[(train.n+1):length(y)])
   
-  fits <- list()
-  fits.idx <- 1
-  for (i in seq(from=(train.n+1), to=length(y), by=freq)) {
-    print(paste("Training up to observation", i-1))
-    spec <- ugarchspec(variance.model = list(model=model,
-                                             garchOrder=c(1,1),
-                                             submodel=submodel,
-                                             external.regressors=var.xreg),
-                       mean.model     = list(armaOrder=c(1,1),
-                                             include.mean=TRUE,
-                                             external.regressors=mean.xreg),
-                       distribution.model = "norm")
+  errors_preds_fits <- foreach(i = seq(from=(train.n+1), to=length(y), by=freq),
+                                .combine=list, .multicombine=TRUE) %dopar% {
     train.idx = 1:(i-1)
     test.idx = i:min((i+freq-1), length(y))
     all.idx <- c(train.idx, test.idx)
+    if (!is.null(var.xreg) | !is.null(mean.xreg)) {
+      if (!is.null(var.xreg)) {
+        train.pca <- fast.prcomp(var.xreg[train.idx,])
+        pred.pca <- as.matrix(var.xreg[test.idx,]) %*% train.pca$rotation[,1:prcomps]
+        var.x <- rbind(train.pca$x[,1:prcomps], pred.pca)
+      }
+      else
+        var.x <- NULL
+      if (!is.null(mean.xreg)) {
+        train.pca <- fast.prcomp(mean.xreg[train.idx,])
+        pred.pca <- as.matrix(mean.xreg[test.idx,]) %*% train.pca$rotation[,1:prcomps]
+        mean.x <- rbind(train.pca$x[,1:prcomps], pred.pca)
+      }
+      else
+        mean.x <- NULL
+    }
+    else {
+      var.x <- NULL
+      mean.x <- NULL
+    }
+    
+    spec <- ugarchspec(variance.model = list(model=model,
+                                             garchOrder=c(r,s),
+                                             submodel=submodel,
+                                             external.regressors=var.x,
+                                             variance.targeting=target),
+                       mean.model     = list(armaOrder=c(p,q),
+                                             include.mean=TRUE,
+                                             external.regressors=mean.x),
+                       distribution.model = dist)
     garch <- ugarchfit(spec=spec, data=y[all.idx], solver=solver, 
-                       out.sample=length(test.idx))
-    fits[[fits.idx]] <- garch
-    fits.idx <- fits.idx + 1
+                       out.sample=length(test.idx),
+                       solver.control=list(n.restarts=1))
     forc <- ugarchforecast(garch, n.ahead=1, n.roll=length(test.idx))
-    garch.pred <- fitted(forc)[-1]
-    idx = i:(min((i+freq-1), length(y)))
-    preds[idx-train.n] = garch.pred
-    errors[idx-train.n] = garch.pred - y[idx]
+    if (getVar) garch.pred <- sigma(forc)[-length(sigma(forc))]
+    else garch.pred <- fitted(forc)[-length(fitted(forc))]
+    idx <- i:(min((i+freq-1), length(y)))
+    if (!is.null(ref))
+      list(preds=ann.fac*garch.pred, errors=garch.pred-ref[idx], fit=garch)
+    else
+      list(preds=garch.pred, errors=garch.pred-y[idx], fit=garch)
+  }
+  errors <- c()
+  preds <- c()
+  fits <- list()
+  for (k in 1:length(errors_preds_fits)) {
+    errors <- c(errors, errors_preds_fits[[k]]$errors)
+    preds <- c(preds, errors_preds_fits[[k]]$preds)
+    fits[[k]] <- errors_preds_fits[[k]]$fit
   }
   names(preds) <- dates
   names(errors) <- dates
+  
   return(list(errors=errors,preds=preds,fits=fits))
 }
  
-# 
+rollingARMA <- function(y, train.n, freq, p=1, q=1, dist="norm",
+                        solver="hybrid", mean.xreg=NULL, prcomps=2) {
+  dates <- names(y[(train.n+1):length(y)])
+  errors_preds_fits <- foreach(i = seq(from=(train.n+1), to=length(y), by=freq),
+                               .combine=list, .multicombine=TRUE) %dopar% {
+                                 #print(paste("Training up to observation", i-1))
+                                 train.idx = 1:(i-1)
+                                 test.idx = i:min((i+freq-1), length(y))
+                                 all.idx <- c(train.idx, test.idx)
+                                 if (!is.null(mean.xreg)) {
+                                   train.pca <- fast.prcomp(mean.xreg[train.idx,])
+                                   pred.pca <- as.matrix(mean.xreg[test.idx,]) %*% train.pca$rotation[,1:prcomps]
+                                   mean.x <- rbind(train.pca$x[,1:prcomps], pred.pca)
+                                 }
+                                 else
+                                   mean.x <- NULL
+                                 armaspec <- arfimaspec(mean.model=list(armaOrder=c(p,q)), 
+                                                        external.regressors=mean.x,
+                                                        distribution.model="norm",
+                                                        fixed.pars=list(mxreg1=rep(1,prcomps)))
+                                 setbounds(armaspec) <-c(-100,100)
+                                 arma <- arfimafit(spec=armaspec, data=y[all.idx], solver=solver, 
+                                                 out.sample=length(test.idx))
+                                 forc <- arfimaforecast(arma, n.ahead=1, n.roll=length(test.idx))
+                                 arma.pred <- fitted(forc)[-length(fitted(forc))]
+                                 idx <- i:(min((i+freq-1), length(y)))
+                                 list(preds=arma.pred, errors=arma.pred-y[idx], fit=arma)
+                               }
+  errors <- c()
+  preds <- c()
+  fits <- list()
+  for (k in 1:length(errors_preds_fits)) {
+    errors <- c(errors, errors_preds_fits[[k]]$errors)
+    preds <- c(preds, errors_preds_fits[[k]]$preds)
+    fits[[k]] <- errors_preds_fits[[k]]$fit
+  }
+  names(preds) <- dates
+  names(errors) <- dates
+  
+  return(list(errors=errors,preds=preds,fits=fits))
+}
+
 # # rollingGBMPredict
 # # rolling gbm predictions
 # # x - matrix, features

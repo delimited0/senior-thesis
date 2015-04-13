@@ -1,6 +1,7 @@
 # time series "cross validation" rolling forecast functions
 source('code/rollingRegression.R')
 source('code/diagnostic.R')
+source('code/transRegFuncs.R')
 
 
 optADL <- function(x, y, x.lags, y.lags, train.n, freq, verbose=FALSE) {
@@ -17,7 +18,7 @@ optADL <- function(x, y, x.lags, y.lags, train.n, freq, verbose=FALSE) {
       if (yl >= xl) delta <- yl+1
       else delta <- xl
       result <- rollingADL(dat, y, delta, train.n, freq)
-      result.error <- errors(result$errors, result$preds, y)
+      result.error <- errors(result, y)
       if (result.error$MSE < min.mse$MSE) 
         min.mse <- list(MSE=result.error$MSE, xl=xl, yl=yl, fits=result)
       if (result.error$MAE < min.mae$MAE) 
@@ -31,7 +32,7 @@ optADL <- function(x, y, x.lags, y.lags, train.n, freq, verbose=FALSE) {
 }
 
 optGLMNET <- function(x, y, x.lags, y.lags, alphas, train.n, freq, 
-                      verbose=FALSE, keepVols=FALSE) {
+                      verbose=FALSE, keepVols=FALSE, parallel=FALSE) {
   min.mse <- list(MSE=Inf, xl=NULL, yl=NULL)
   min.mae <- list(MAE=Inf, xl=NULL, yl=NULL)
   min.ql <- list(QL=Inf, xl=NULL, yl=NULL)
@@ -61,15 +62,15 @@ optGLMNET <- function(x, y, x.lags, y.lags, alphas, train.n, freq,
           pf <- c(rep(1, ncol(dat)-yl), rep(0, yl))
         else 
           pf <- NULL
-        result <- rollingEnetPredict(as.matrix(dat), y, delta, train.n, 
-                                     a, freq, pf)
-        result.error <- errors(result$errors, result$preds, y)
+        result <- rollingEnetPredict(x=as.matrix(dat), y=y, delta=delta, train.n=train.n, 
+                                     alpha=a, freq=freq, pf=pf, parallel)
+        result.error <- errors(result, y)
         if (result.error$MSE < min.mse$MSE) 
-          min.mse <- list(MSE=result.error$MSE, xl=xl, yl=yl, alpha=a)
+          min.mse <- list(MSE=result.error$MSE, xl=xl, yl=yl, alpha=a, fit=result)
         if (result.error$MAE < min.mae$MAE) 
-          min.mae <- list(MAE=result.error$MAE, xl=xl, yl=yl, alpha=a)
+          min.mae <- list(MAE=result.error$MAE, xl=xl, yl=yl, alpha=a, fit=result)
         if (result.error$QL < min.ql$QL)
-          min.ql <- list(QL=result.error$QL, xl=xl, yl=yl, alpha=a)
+          min.ql <- list(QL=result.error$QL, xl=xl, yl=yl, alpha=a, fit=result)
         grid.mse[xl.idx,yl.idx,a.idx] <- result.error$MSE
         grid.mae[xl.idx,yl.idx,a.idx] <- result.error$MAE
         grid.ql[xl.idx,yl.idx,a.idx]  <- result.error$QL
@@ -81,8 +82,7 @@ optGLMNET <- function(x, y, x.lags, y.lags, alphas, train.n, freq,
               grid.mse=grid.mse, grid.mae=grid.mae, grid.ql=grid.ql))
 }
 
+# paramKeeper <- function(dtm, terms) {
+#   
+# }
 
-
-pcaGARCH <- function(x, y, train.n, freq) {
-  
-}

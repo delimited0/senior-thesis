@@ -1,10 +1,14 @@
 # Load and pre-process Beigebook and S&P 500 thesis data
 setwd("~/Documents/Thesis")
+source('code/dataFuncs.R')
 source('code/volFuncs.R')
+library('topicmodels')
+library('NMF')
+library('gmodels')
 
 sp500 <- read.csv("data/sp500.csv")
 sp500 <- sp500[nrow(sp500):1,]  # reverse data
-sp500$Date <- dateFix(as.Date(sp500$Date, "%m/%d/%y"))
+sp500$Date <- as.Date(sp500$Date, "%Y-%m-%d")
 rownames(sp500) <- NULL
 beigebook <- read.csv("data/BB/beigebook.csv")
 beigebook$Date <- as.Date(beigebook$Date, "%m/%d/%y")
@@ -17,25 +21,17 @@ beigebook$Date <- as.Date(beigebook$Date, "%m/%d/%y")
 # numdocs = dim(beigebook)[1]
 # Section A; Page 1, Column 1
 
-sp500.vol <- interVol(sp500$Adj.Close, sp500$Date, beigebook$Date)
+sp500.vol <- interVol(sp500$Adj.Close, sp500$Date, beigebook$Date, sameday=TRUE, ann=TRUE)
+sp500.ret <- interRet(sp500$Adj.Close, sp500$Date, beigebook$Date, sameday=TRUE)
+
 beigebook <- beigebook[-nrow(beigebook),]
 
 # dtm
 bb.docs <- Corpus(VectorSource(beigebook$Text))
-bb.docs <- tm_map(bb.docs, removeWords,
-              c("Boston", "New York", "Atlanta", "St. Louis", "Cleveland",
-                "Chicago", "Richmond", "Dallas", "Philadelphia", 
-                "Minneapolis", "Kansas City", "San Francisco",
-                "Overview", "Introduction"))
-bb.docs <- tm_map(bb.docs, content_transformer(tolower), lazy=T)
-bb.docs <- tm_map(bb.docs, removeNumbers, lazy=T)
-bb.docs <- tm_map(bb.docs, removePunctuation, lazy=T)
-bb.docs <- tm_map(bb.docs, removeWords, stopwords("english"), lazy=T)
-bb.docs <- tm_map(bb.docs, stripWhitespace, lazy=T)
-bb.docs <- tm_map(bb.docs, stemDocument)
-bb.docs <- tm_map(bb.docs, removeWords, 
-                  c("general", "the","report", "also", "said", "note",
-                    "indic", "district"), lazy=T)
+bb.docs <- prepText(bb.docs, c("boston", "new york", "atlanta", "st. louis", 
+                               "cleveland", "chicago", "richmond", "dallas", 
+                               "philadelphia", "minneapolis", "kansas city", 
+                               "san francisco", "overview", "introduction"))
 bb.dtm <- DocumentTermMatrix(bb.docs)
 
 # look at which terms are most correlated with volatility

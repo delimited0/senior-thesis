@@ -17,6 +17,7 @@ sp500$Date <- as.Date(sp500$Date, "%Y-%m-%d")
 rownames(sp500) <- NULL
 
 barron.vol <- interVol(sp500$Adj.Close, sp500$Date, dat.Barron$Date)
+barron.ret <- interRet(sp500$Adj.Close, sp500$Date, dat.Barron$Date)
 dat.Barron <- dat.Barron[dat.Barron$Date %in% as.Date(names(barron.vol)),]
 
 barron.docs <- Corpus(VectorSource(dat.Barron$Text))
@@ -24,7 +25,7 @@ barron.docs <- prepText(barron.docs)
 barron.dtm <- DocumentTermMatrix(barron.docs)
 rownames(barron.dtm) <- dat.Barron$Date
 barron.tfidf <- weightTfIdf(barron.dtm)
-barron.rem.dtm <- removeSparseTerms(barron.dtm, .975)
+barron.rem.dtm <- removeSparseTerms(barron.dtm, .992)
 barron.rem.tfidf <- weightTfIdf(barron.rem.dtm)
 #barron.dtm <- log(as.matrix(barron.dtm)+1)
 

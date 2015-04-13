@@ -35,6 +35,7 @@ profile = webdriver.FirefoxProfile()
 profile.permissions_default_stylesheet = 2
 profile.permissions_default_image = 2
 wd = webdriver.Firefox(profile)
+#wd = webdriver.Firefox()
 wait = WebDriverWait(wd, 1000)
 
 # set up, enter search terms/params
